@@ -2,7 +2,7 @@
 #
 # python version 3.11
 #
-import argparse, sys, shutil, os, signal, re, datetime
+import argparse, sys, os, signal, re, datetime
 from subprocess import Popen, PIPE, STDOUT
 from os import listdir
 from time import sleep
@@ -142,10 +142,96 @@ def makeBaseMap(id, pos):
         # if the full map is not available, use a blank image
         mapImg.save(mapPath)
 
+# Check to see if all traffic tiles have been received. Taken from nrsc5-dui.py
+def checkTiles(t):
+    # check if all the tiles have been received
+    for i in range(0,3):
+        for j in range(0,3):
+            if (mapData["mapTiles"][i][j] != t):
+                return False
+    return True
+
 # Force it to wait a second before we attempt to process
 def makeWeatherMap(fileName):
     sleep(1)
     processWeatherOverlay(fileName)
+
+def makeTrafficMap(fileName):
+    sleep(1)
+    processTrafficMap(fileName)
+
+# Process the map Tiles. Taken from nrsc5-dui
+def processTrafficMap(fileName):
+    r = re.compile("^[\d]+_TMT_.*_([1-3])_([1-3])_([\d]{4})([\d]{2})([\d]{2})_([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})_([0-9A-Fa-f]{4})\..*$")     # match file name
+    m = r.match(fileName)
+        
+    if (m):
+        x       = int(m.group(1))-1 # X position
+        y       = int(m.group(2))-1 # Y position
+        
+        # get time from map tile and convert to local time
+        dt = datetime.datetime(int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6)), int(m.group(7)), tzinfo=tz.tzutc())
+        t  = dt.astimezone(tz.tzlocal())                                                           # local time
+        ts = dtToTs(dt)                                                                            # unix timestamp (utc)
+            
+        # check if the tile has already been loaded
+        if (mapData["mapTiles"][x][y] == ts):
+            try:
+                os.remove(os.path.join(aasDir, fileName))                                           # delete this tile, it's not needed
+            except:
+                pass
+            return                                                                                  # no need to recreate the map if it hasn't changed
+        
+        print("Got Traffic Map Tile: {:g},{:g}".format(x,y))
+                
+        mapData["mapComplete"]    = False                                                     # new tiles are coming in, the map is nolonger complete
+        mapData["mapTiles"][x][y] = ts                                                        # store time for current tile
+            
+        try:
+            currentPath = os.path.join(aasDir,fileName)
+            newPath = os.path.join(mapDir, "TrafficMap_{:g}_{:g}.png".format(x,y))                 # create path to new tile location
+            if(os.path.exists(newPath)): os.remove(newPath)                                         # delete old image if it exists (only necessary on windows)
+            #shutil.move(currentPath, newPath)                                                     # move and rename map tile
+            fs = open(currentPath, 'rb')
+            fd = open(newPath, 'wb')
+            fd.write(fs.read())
+            os.remove(currentPath)
+                    # move and rename map tile
+            
+        except:
+            print("Error moving map tile (src: "+currentPath+", dest: "+newPath+")", True)
+            mapData["mapTiles"][x][y] = 0
+                
+        # check if all of the tiles are loaded
+        if (checkTiles(ts)):
+            print("Got complete traffic map")
+            mapData["mapComplete"] = True                                                      # map is complete
+                
+            # stitch the map tiles into one image
+            imgMap = Image.new("RGB", (600, 600), "white")                                          # create blank image for traffic map
+            for i in range(0,3):
+                for j in range(0,3):
+                    tileFile = os.path.join(mapDir, "TrafficMap_{:g}_{:g}.png".format(i,j))         # get path to tile
+                    imgMap.paste(Image.open(tileFile), (j*200, i*200))                              # paste tile into map
+                    os.remove(tileFile)                                                             # delete tile image
+
+            # now put a timestamp on it.
+            imgMap   = imgMap.convert("RGBA")
+            imgBig   = (981,981)                                                                     # size of a weather map
+            posTS    = (imgBig[0]-235, imgBig[1]-29)                                                 # calculate position to put timestamp (bottom right)
+            imgTS    = mkTimestamp(t, imgBig, posTS)                                            # create timestamp for a weather map
+            imgTS    = imgTS.resize((imgMap.size[0], imgMap.size[1]), imgLANCZOS)                 # resize it so it's proportional to the size of a traffic map (981 -> 600)
+            imgMap   = Image.alpha_composite(imgMap, imgTS)                                          # overlay timestamp on traffic map
+            imgMap.save(os.path.join(mapDir, "TrafficMap.png"))                                      # save traffic map
+                
+            # display on map page
+            #if (self.radMapTraffic.get_active()):
+            #    img_size = min(self.alignmentMap.get_allocated_height(), self.alignmentMap.get_allocated_width()) - 12
+            #    imgMap = imgMap.resize((img_size, img_size), imgLANCZOS)                         # scale map to fit window
+            #    self.imgMap.set_from_pixbuf(imgToPixbuf(imgMap))                                    # convert image to pixbuf and display
+            
+            #if (self.mapViewer is not None): self.mapViewer.updated(0)                              # notify map viwerer if it's open
+
 
 
 # Process the WeatherOverlay. Taken from nrsc5-dui.py
@@ -277,6 +363,10 @@ while True:
         if 'DWRO'.lower() in fn.lower():
             print(fn)
             makeWeatherMap(fn)
+        # If we find a Traffic map tile, let's process it
+        if 'TMT'.lower() in fn.lower():
+            print(fn)
+            makeTrafficMap(fn)
             
         
             
