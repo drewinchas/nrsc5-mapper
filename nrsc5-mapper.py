@@ -346,7 +346,7 @@ nrsc5args.append(myargs.frequency)
 nrsc5args.append(myargs.program)
 
 # Launch nrsc5 in the background
-nrsc5PID = Popen(nrsc5args, shell=False)
+nrsc5PID = Popen(nrsc5args, shell=False, stderr=nrsc5log)
 print(nrsc5PID.pid)
 
 while True:
